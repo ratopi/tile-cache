@@ -1,0 +1,6 @@
+-sname tc
+
+-setcookie tc_cookie
+
++K true
++A30

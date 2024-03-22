@@ -1,0 +1,23 @@
+{application, tc, [
+	{description, "TileCache"},
+
+	{vsn, "0.0.0"},
+
+	{registered, []},
+	{mod, {tc_app, []}},
+
+	{applications, [
+		kernel,
+		stdlib,
+		cowboy
+	]},
+
+	{env, [
+		{port, 8080}
+	]},
+
+	{modules, []},
+
+	{licenses, ["Apache-2.0"]},
+	{links, []}
+]}.
