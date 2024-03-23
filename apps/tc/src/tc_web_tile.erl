@@ -14,26 +14,31 @@
 
 -define(DELIVER_TIMEOUT, 30 * 1000).
 
+-record(state, {ref}).
+
 %%====================================================================
 %% cowboy callback
 %%====================================================================
 
-init(Req = #{headers := Headers, bindings := #{x := X, y := Y, z := Z}}, State) ->
-	tc_tile_cache:deliver(self(), Headers, Z, X, Y),
-	{cowboy_loop, Req, State, ?DELIVER_TIMEOUT}.
+init(Req = #{headers := Headers, bindings := #{x := X, y := Y, z := Z}}, []) ->
+	{ok, Ref} = tc_tile_cache:deliver(self(), Headers, Z, X, Y),
+	{cowboy_loop, Req, #state{ref = Ref}, ?DELIVER_TIMEOUT}.
 
 %%====================================================================
 %% data callback
 %%====================================================================
 
-info(eof, Req, State) ->
+info({Ref, eof}, Req, State = #state{ref = Ref}) ->
 	{stop, Req, State};
 
-info({headers, Headers}, Req, State) ->
+info({Ref, timeout}, Req, State = #state{ref = Ref}) ->
+	{stop, Req, State};
+
+info({Ref, {headers, Headers}}, Req, State = #state{ref = Ref}) ->
 	NewReq = cowboy_req:stream_reply(200, Headers, Req),
 	{ok, NewReq, State};
 
-info({data, Data}, Req, State) ->
+info({Ref, {data, Data}}, Req, State = #state{ref = Ref}) ->
 	ok = cowboy_req:stream_body(Data, nofin, Req),
 	{ok, Req, State};
 

@@ -14,9 +14,11 @@
 
 -define(SERVER, ?MODULE).
 
--record(tile_cache_state, {cache_dir = <<"/tmp/">>, tile_server_url = <<"https://tile.openstreetmap.org/">>}).
+-record(tile_cache_state, {cache_dir = <<"/tmp/tile-cache/">>, tile_server_url = <<"https://tile.openstreetmap.org/">>}).
 
 -define(HTTP_TIMEOUT, 30 * 1000).
+
+-record(request, {cache_dir, tile_server_url, message_ref, client_pid, client_headers, filepath, filepath_info, filepath_last_access, coordinates_path, z, x, y}).
 
 %%%===================================================================
 %%% API
@@ -41,13 +43,14 @@ init([]) ->
 
 
 
-handle_call({deliver, ClientPid, ClientHeaders, Z, X, Y}, _From, State = #tile_cache_state{}) ->
+handle_call({deliver, ClientPid, ClientHeaders, Z, X, Y}, _From, State = #tile_cache_state{cache_dir = CacheDir, tile_server_url = TileServerUrl}) ->
+	Ref = make_ref(),
 	spawn(
 		fun() ->
-			inner_deliver(ClientPid, ClientHeaders, Z, X, Y)
+			inner_deliver(set_filepaths(#request{cache_dir = CacheDir, tile_server_url = TileServerUrl, message_ref = Ref, client_pid = ClientPid, client_headers = ClientHeaders, z = Z, x = X, y = Y}))
 		end
 	),
-	{reply, ok, State};
+	{reply, {ok, Ref}, State};
 
 handle_call(_Request, _From, State = #tile_cache_state{}) ->
 	{reply, ok, State}.
@@ -76,58 +79,66 @@ code_change(_OldVsn, State = #tile_cache_state{}, _Extra) ->
 %%% internal functions
 %%%===================================================================
 
-inner_deliver(ClientPid, ClientHeaders, Z, X, Y) ->
+set_filepaths(Request = #request{x = X, y = Y, z = Z, cache_dir = CacheDir}) ->
+	Dir1 = <<CacheDir/binary, Z/binary>>,
+	Dir2 = <<Dir1/binary, $/, X/binary>>,
+
+	file:make_dir(Dir1),
+	file:make_dir(Dir2),
 
 	Path = <<Z/binary, $/, X/binary, $/, Y/binary>>,
+	Filepath = <<CacheDir/binary, Path/binary>>,
+	InfoFilepath = <<Filepath/binary, ".info">>,
+	LastAccessFilepath = <<Filepath/binary, ".last">>,
 
-	Filename = <<"/tmp/tile-cache/", Path/binary>>,
-	HeaderFilename = <<Filename/binary, ".headers">>,
+	Request#request{coordinates_path = Path, filepath = Filepath, filepath_info = InfoFilepath, filepath_last_access = LastAccessFilepath}.
 
-	case deliver_file(ClientPid, Filename, HeaderFilename) of
+
+
+inner_deliver(Request = #request{}) ->
+	case deliver_file(Request) of
 		ok ->
 			ok;
-
-		{not_found, Filename} ->
-			file:make_dir(<<"/tmp/tile-cache/", Z/binary>>),
-			file:make_dir(<<"/tmp/tile-cache/", Z/binary, $/, X/binary>>),
-			deliver_url(ClientPid, ClientHeaders, Filename, HeaderFilename, Path)
-
+		not_found ->
+			deliver_url(Request)
 	end.
 
 
 
-deliver_file(ClientPid, Filename, HeaderFilename) ->
-	case file:open(Filename, [read, raw, binary]) of
+deliver_file(Request = #request{filepath = Filepath, filepath_info = InfoFilepath}) ->
+	case file:open(Filepath, [read, raw, binary]) of
 		{error, _} ->
-			{not_found, Filename};
+			not_found;
 		{ok, IO} ->
-			io:fwrite("~p from cache~n", [Filename]),
-			{ok, [Headers | _]} = file:consult(HeaderFilename),
-			ClientPid ! {headers, Headers},
-			deliver_file_content(IO, ClientPid),
+			io:fwrite("~p from cache~n", [Filepath]),
+			spawn(fun() -> set_last_access(Request) end),
+			{ok, [Headers | _]} = file:consult(InfoFilepath),
+			send_to_client(Request, {headers, Headers}),
+			deliver_file_content(IO, Request),
 			file:close(IO)
 	end.
 
 
 
-deliver_file_content(IO, ClientPid) ->
+deliver_file_content(IO, Request = #request{}) ->
 	case file:read(IO, 1024) of
 		{ok, Data} ->
-			ClientPid ! {data, Data},
-			deliver_file_content(IO, ClientPid);
+			send_to_client(Request, {data, Data}),
+			deliver_file_content(IO, Request);
 		eof ->
-			ClientPid ! eof;
+			send_to_client(Request, eof);
 		Err = {error, _} ->
 			Err
 	end.
 
 
 
-deliver_url(ClientPid, ClientHeaders, Filename, HeaderFilename, Path) ->
-	{ok, IO} = file:open(Filename, [write, raw, binary]),
+deliver_url(Request = #request{tile_server_url = TileServerUrl, filepath = Filepath, coordinates_path = Path, client_headers = ClientHeaders}) ->
+	{ok, IO} = file:open(Filepath, [write, raw, binary]),
 
 	%%% https://tile.openstreetmap.org/{z}/{x}/{y}.png>>,
-	Url = <<"https://tile.openstreetmap.org/", Path/binary>>,
+	% Url = <<"https://tile.openstreetmap.org/", Path/binary>>,
+	Url = <<TileServerUrl/binary, Path/binary>>,
 
 	ClientHeadersMapped = lists:map(
 		fun({K, V}) ->
@@ -138,33 +149,40 @@ deliver_url(ClientPid, ClientHeaders, Filename, HeaderFilename, Path) ->
 
 	case httpc:request(get, {Url, ClientHeadersMapped}, [], [{sync, false}, {stream, self}, {body_format, binary}]) of
 		{ok, RequestId} ->
-			R = repacker(IO, HeaderFilename, RequestId, ClientPid),
-			io:fwrite("~p now in cache~n", [Filename]),
+			R = repacker(IO, RequestId, Request),
+			io:fwrite("~p now in cache~n", [Filepath]),
 			file:close(IO)
 	end.
 
 
 
-repacker(IO, HeaderFilename, RequestId, ClientPid) ->
+repacker(IO, RequestId, Request = #request{}) ->
 	receive
 		{http, {RequestId, stream_start, Headers}} ->
 			ConvertedHeaders = convert_headers(Headers),
-			ClientPid ! {headers, ConvertedHeaders},
-			Info = #{loaded_at => erlang:universaltime()},
-			file:write_file(HeaderFilename, io_lib:format("~p.~n~p.~n", [ConvertedHeaders, Info])),
-			repacker(IO, HeaderFilename, RequestId, ClientPid);
+			send_to_client(Request, {headers, ConvertedHeaders}),
+			spawn(
+				fun() ->
+					set_last_access(Request),
+					Info = #{loaded_at => erlang:universaltime()},
+					file:write_file(Request#request.filepath_info, io_lib:format("~p.~n~p.~n", [ConvertedHeaders, Info]))
+				end
+			),
+			repacker(IO, RequestId, Request);
 
 		{http, {RequestId, stream, BinBodyPart}} ->
-			ClientPid ! {data, BinBodyPart},
+			send_to_client(Request, {data, BinBodyPart}),
 			file:write(IO, BinBodyPart),
-			repacker(IO, HeaderFilename, RequestId, ClientPid);
+			repacker(IO, RequestId, Request);
 
 		{http, {RequestId, stream_end, _Headers}} ->
-			ClientPid ! eof
+			send_to_client(Request, eof)
 
 	after ?HTTP_TIMEOUT ->
+		send_to_client(Request, timeout),
 		timeout
 	end.
+
 
 
 convert_headers(HeaderList) ->
@@ -176,3 +194,12 @@ convert_headers(HeaderList) ->
 		HeaderList
 	).
 
+
+
+send_to_client(#request{message_ref = Ref, client_pid = ClientPid}, Msg) ->
+	ClientPid ! {Ref, Msg}.
+
+
+
+set_last_access(#request{filepath_last_access = LastAccessFilepath}) ->
+	file:write_file(LastAccessFilepath, erlang:integer_to_binary(os:system_time(millisecond))).
