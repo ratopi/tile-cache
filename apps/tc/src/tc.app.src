@@ -9,11 +9,14 @@
 	{applications, [
 		kernel,
 		stdlib,
+		inets,
 		cowboy
 	]},
 
 	{env, [
-		{port, 8008}
+		{port, 8008},
+		{cache_dir, <<"/tmp/tile-cache/">>},
+		{tile_server_url, <<"https://tile.openstreetmap.org/">>}
 	]},
 
 	{modules, []},

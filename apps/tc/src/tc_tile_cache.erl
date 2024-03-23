@@ -9,12 +9,12 @@
 -behaviour(gen_server).
 
 -export([deliver/5]).
--export([start_link/0]).
+-export([start_link/2]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
 
--record(tile_cache_state, {cache_dir = <<"/tmp/tile-cache/">>, tile_server_url = <<"https://tile.openstreetmap.org/">>}).
+-record(tile_cache_state, {cache_dir, tile_server_url}).
 
 -define(HTTP_TIMEOUT, 30 * 1000).
 
@@ -31,15 +31,16 @@ deliver(ClientPid, ClientHeaders, Z, X, Y) ->
 %%% spawning
 %%%===================================================================
 
-start_link() ->
-	gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+start_link(CacheDir, TileServerUrl) ->
+	file:make_dir(CacheDir),
+	gen_server:start_link({local, ?SERVER}, ?MODULE, [CacheDir, TileServerUrl], []).
 
 %%%===================================================================
 %%% gen_server implementation
 %%%===================================================================
 
-init([]) ->
-	{ok, #tile_cache_state{}}.
+init([CacheDir, TileServerUrl]) ->
+	{ok, #tile_cache_state{cache_dir = CacheDir, tile_server_url = TileServerUrl}}.
 
 
 

@@ -23,6 +23,8 @@ start_link() ->
 
 init([]) ->
 	{ok, Port} = application:get_env(port),
+	{ok, CacheDir} = application:get_env(cache_dir),
+	{ok, TileServerUrl} = application:get_env(tile_server_url),
 
 	Spec =
 		#{
@@ -32,7 +34,7 @@ init([]) ->
 	Children = [
 		#{
 			id => tc_tile_cache,
-			start => {tc_tile_cache, start_link, []},
+			start => {tc_tile_cache, start_link, [CacheDir, TileServerUrl]},
 			type => worker
 		},
 		#{
