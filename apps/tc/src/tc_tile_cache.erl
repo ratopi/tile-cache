@@ -101,7 +101,8 @@ deliver_file(ClientPid, Filename, HeaderFilename) ->
 		{error, _} ->
 			{not_found, Filename};
 		{ok, IO} ->
-			{ok, [Headers]} = file:consult(HeaderFilename),
+			io:fwrite("~p from cache~n", [Filename]),
+			{ok, [Headers | _]} = file:consult(HeaderFilename),
 			ClientPid ! {headers, Headers},
 			deliver_file_content(IO, ClientPid),
 			file:close(IO)
@@ -123,45 +124,37 @@ deliver_file_content(IO, ClientPid) ->
 
 
 deliver_url(ClientPid, ClientHeaders, Filename, HeaderFilename, Path) ->
-	io:fwrite("Filename ~p~n", [Filename]),
-
 	{ok, IO} = file:open(Filename, [write, raw, binary]),
 
 	%%% https://tile.openstreetmap.org/{z}/{x}/{y}.png>>,
 	Url = <<"https://tile.openstreetmap.org/", Path/binary>>,
-	% Url = <<"http://localhost:8080/LOG">>,
-	% io:fwrite("URL : ~p~n", [Url]),
+
 	ClientHeadersMapped = lists:map(
 		fun({K, V}) ->
 			{binary_to_list(K), V}
 		end,
 		maps:to_list(maps:remove(<<"host">>, ClientHeaders))
 	),
-	% io:fwrite("ClientHeaders : ~p~n", [ClientHeadersMapped]),
+
 	case httpc:request(get, {Url, ClientHeadersMapped}, [], [{sync, false}, {stream, self}, {body_format, binary}]) of
 		{ok, RequestId} ->
-			% io:fwrite("RequestId ~p~n", [RequestId]),
 			R = repacker(IO, HeaderFilename, RequestId, ClientPid),
-			io:fwrite("repacker terminates with ~p~n", [R]),
+			io:fwrite("~p now in cache~n", [Filename]),
 			file:close(IO)
 	end.
 
 
 
 repacker(IO, HeaderFilename, RequestId, ClientPid) ->
-	% io:fwrite("repacker~n"),
 	receive
 		{http, {RequestId, stream_start, Headers}} ->
 			ConvertedHeaders = convert_headers(Headers),
-			% io:fwrite("HHH ~p~n", [ConvertedHeaders]),
 			ClientPid ! {headers, ConvertedHeaders},
 			Info = #{loaded_at => erlang:universaltime()},
-			R = file:write_file(HeaderFilename, io_lib:format("~p.~n~p.~n", [ConvertedHeaders, Info])),
-			io:fwrite("HF ~p~n", [R]),
+			file:write_file(HeaderFilename, io_lib:format("~p.~n~p.~n", [ConvertedHeaders, Info])),
 			repacker(IO, HeaderFilename, RequestId, ClientPid);
 
 		{http, {RequestId, stream, BinBodyPart}} ->
-			% io:fwrite("D ~p~n", [size(BinBodyPart)]),
 			ClientPid ! {data, BinBodyPart},
 			file:write(IO, BinBodyPart),
 			repacker(IO, HeaderFilename, RequestId, ClientPid);

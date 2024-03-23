@@ -39,9 +39,10 @@ get_cowboy_dispatch() ->
 
 	Routes =
 		[
-			{"/", cowboy_static, {priv_file, tc, "static/index.html"}},
 			{"/LOG", tc_web_log, []},
-			{"/:z/:x/:y", tc_web_tile, []}
+			{"/:z/:x/:y", tc_web_tile, []},
+			{"/", cowboy_static, {priv_file, tc, "static/index.html"}},
+			{"/[...]", cowboy_static, {priv_dir, tc, "static"}}
 		],
 
 	cowboy_router:compile([{Hosts, Routes}]).
