@@ -18,7 +18,7 @@
 
 -define(HTTP_TIMEOUT, 30 * 1000).
 
--record(request, {cache_dir, tile_server_url, message_ref, client_pid, client_headers, filepath, filepath_info, filepath_last_access, coordinates_path, z, x, y}).
+-record(request, {cache_dir, tile_server_url, message_ref, client_pid, client_headers, filepath, filepath_info, filepath_last_access, coordinates_path, z, x, y, url}).
 
 %%%===================================================================
 %%% API
@@ -149,7 +149,7 @@ deliver_url(Request = #request{tile_server_url = TileServerUrl, filepath = Filep
 
 	case httpc:request(get, {Url, ClientHeadersMapped}, [], [{sync, false}, {stream, self}, {body_format, binary}]) of
 		{ok, RequestId} ->
-			R = repacker(IO, RequestId, Request),
+			R = repacker(IO, RequestId, Request#request{url = Url}),
 			io:fwrite("~p now in cache~n", [Filepath]),
 			file:close(IO)
 	end.
@@ -164,7 +164,7 @@ repacker(IO, RequestId, Request = #request{}) ->
 			spawn(
 				fun() ->
 					set_last_access(Request),
-					Info = #{loaded_at => erlang:universaltime()},
+					Info = #{loaded_at => erlang:universaltime(), url => Request#request.url},
 					file:write_file(Request#request.filepath_info, io_lib:format("~p.~n~p.~n", [ConvertedHeaders, Info]))
 				end
 			),
@@ -202,4 +202,5 @@ send_to_client(#request{message_ref = Ref, client_pid = ClientPid}, Msg) ->
 
 
 set_last_access(#request{filepath_last_access = LastAccessFilepath}) ->
-	file:write_file(LastAccessFilepath, erlang:integer_to_binary(os:system_time(millisecond))).
+	Now = os:system_time(millisecond),
+	file:write_file(LastAccessFilepath, <<Now:64>>).
