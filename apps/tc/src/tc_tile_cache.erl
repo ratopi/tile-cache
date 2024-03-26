@@ -113,10 +113,15 @@ deliver_file(Request = #request{filepath = Filepath, filepath_info = InfoFilepat
 		{ok, IO} ->
 			io:fwrite("~p from cache~n", [Filepath]),
 			spawn(fun() -> set_last_access(Request) end),
-			{ok, [Headers | _]} = file:consult(InfoFilepath),
-			send_to_client(Request, {headers, Headers}),
-			deliver_file_content(IO, Request),
-			file:close(IO)
+			case file:consult(InfoFilepath) of
+				{ok, [Headers | _]} ->
+					send_to_client(Request, {headers, Headers}),
+					deliver_file_content(IO, Request),
+					file:close(IO);
+				_ ->
+					file:close(IO),
+					not_found
+			end
 	end.
 
 
