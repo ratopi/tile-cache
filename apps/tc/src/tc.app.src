@@ -1,7 +1,7 @@
 {application, tc, [
 	{description, "TileCache"},
 
-	{vsn, "0.0.0"},
+	{vsn, "0.0.2"},
 
 	{registered, []},
 	{mod, {tc_app, []}},
